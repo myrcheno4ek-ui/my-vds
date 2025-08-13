@@ -16,7 +16,6 @@ jobs:
 
     steps:
       # Шаг 1: Скачиваем код репозитория
-      # Используем GITHUB_TOKEN, чтобы воркер имел права на запись в репозиторий
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
@@ -27,7 +26,6 @@ jobs:
         run: |
           if [ -f "vds_backup.zip" ]; then
             echo "Backup file found. Restoring..."
-            # Распаковываем архив с заменой существующих файлов
             unzip -o vds_backup.zip -d ./
           else
             echo "No backup found. Starting fresh."
@@ -35,55 +33,49 @@ jobs:
 
       # Шаг 3: Устанавливаем tmate и запускаем сессию в фоне
       - name: Setup and Run tmate
-        id: tmate_session # Даем ID шагу, чтобы получить его вывод в следующих шагах
+        id: tmate_session
         run: |
           sudo apt-get update && sudo apt-get install -y tmate
-       
-          # Запускаем tmate в фоновом режиме (в "детаче")
+
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
-       
-          # Получаем SSH-строку и передаем ее как вывод шага
+
           TMATE_SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
           echo "TMATE_SSH_URL=${TMATE_SSH}" >> $GITHUB_OUTPUT
           echo "========================================================================="
           echo "SSH connection string: ${TMATE_SSH}"
           echo "========================================================================="
-       
-      # Шаг 4: Сохраняем SSH-ссылку в текстовый файл для удобства
+
+      # Шаг 4: Сохраняем SSH-ссылку в текстовый файл
       - name: Save SSH Link to File
         run: echo "${{ steps.tmate_session.outputs.TMATE_SSH_URL }}" > ssh_link.txt
-   
-      # Шаг 5: ОСНОВНОЙ РАБОЧИЙ ЦИКЛ. Здесь сервер "живет"
+
+      # Шаг 5: Ждем 5 часов 45 минут
       - name: Keep VDS Alive
         run: |
           echo "VDS is running. Will shut down and backup in approximately 5 hours 45 minutes."
-          # Ждем ~5ч 45м (20700 секунд). Оставляем 10 минут на бэкап и перезапуск.
           sleep 20700
 
-      # Шаг 6: Создаем бэкап ПЕРЕД выключением
+      # Шаг 6: Создаем бэкап перед завершением
       - name: Create Backup
         run: |
           echo "Creating data backup..."
-          # Архивируем все содержимое текущей директории, кроме папки .git и самого файла бэкапа
           zip -r vds_backup.zip . -x ".git/*" "vds_backup.zip" "ssh_link.txt"
 
-      # Шаг 7: Сохраняем бэкап и SSH-ссылку в репозиторий
+      # Шаг 7: Коммитим бэкап и ssh-ссылку в репозиторий
       - name: Commit Backup and SSH Link
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "VDS Backup & SSH Link Auto-Update"
-          # Указываем, какие файлы коммитить
           file_pattern: "vds_backup.zip ssh_link.txt"
 
-      # Шаг 8: Запускаем следующую сессию (АВТОРЕСТАРТ)
+      # ✅ Шаг 8: Перезапуск следующей сессии через PAT
       - name: Trigger Next VDS Run
         run: |
           echo "Triggering VDS restart..."
-          # Отправляем запрос к API GitHub, чтобы запустить этот же воркфлоу снова
           curl -L \
             -X POST \
             -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token ${{ secrets.VDS_PAT }}" \
             "https://api.github.com/repos/${{ github.repository }}/dispatches" \
             -d '{"event_type": "restart-vds"}'
